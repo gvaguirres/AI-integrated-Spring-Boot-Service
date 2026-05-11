@@ -23,7 +23,7 @@ public class ChatService {
     private static final Logger logger = LoggerFactory.getLogger(ChatService.class);
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
-    private final Cache<String, List<Message>> memory;
+    private final Cache<String, List<Message>> cache;
     private static final int MEMORY_SIZE = 10;
 
     @Value("${openrouter.model}")
@@ -39,7 +39,7 @@ public class ChatService {
             @Value("${chat.session.max-size:1000}") long maxSize) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
-        this.memory = Caffeine.newBuilder()
+        this.cache = Caffeine.newBuilder()
                 .expireAfterAccess(Duration.ofMinutes(ttlMinutes))
                 .maximumSize(maxSize)
                 .build();
@@ -119,28 +119,26 @@ public class ChatService {
     }
 
     public String chat(ApiChatRequest request) {
+        String sessionId = (request.sessionId() == null || request.sessionId().isBlank())
+                ? "default-session"
+                : request.sessionId();
 
-        String sessionId = request.sessionId();
+        final String[] aiAnswerHolder = new String[1];
 
-        if (sessionId == null || sessionId.isBlank())
-            sessionId = "default-session";
+        cache.asMap().compute(sessionId, (key, history) -> {
+            if (history == null) history = new ArrayList<>();
+            synchronized (history) {
+                history.add(new Message("user", request.message()));
+                aiAnswerHolder[0] = getAiResponse(history, request.personality(), MEMORY_SIZE);
+                history.add(new Message("assistant", aiAnswerHolder[0]));
+            }
+            return history;
+        });
 
-        List<Message> history = memory.getIfPresent(sessionId);
-        if (history == null) {
-            history = new ArrayList<>();
-        }
-
-        history.add(new Message("user", request.message()));
-
-        String aiAnswer = getAiResponse(history, request.personality(), MEMORY_SIZE);
-
-        history.add(new Message("assistant", aiAnswer));
-        memory.put(sessionId, history);
-
-        return aiAnswer;
+        return aiAnswerHolder[0];
     }
 
     public Map<String, List<Message>> getMemory() {
-        return memory.asMap();
+        return cache.asMap();
     }
 }
