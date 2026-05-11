@@ -45,7 +45,7 @@ class AiIntegratedSpringBootServiceApplicationTests {
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry){
-        registry.add("openrouter.api.url", () -> wireMockServer.baseUrl() + "/chat/completions");
+        registry.add("openrouter.api.url", () -> "/chat/completions");
         registry.add("openrouter.api.key", () ->  "test-key");
         registry.add("openrouter.model", () -> "openai/gpt-4o-mini");
         registry.add("openrouter.base-url", () -> "http://localhost:" + wireMockServer.port());
