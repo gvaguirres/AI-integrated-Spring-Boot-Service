@@ -1,6 +1,7 @@
 package org.example.aiintegratedspringbootservice;
 
-
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.example.aiintegratedspringbootservice.exception.EmptyResponseException;
 import org.example.aiintegratedspringbootservice.exception.FailedToGetAiResponseException;
 import org.example.aiintegratedspringbootservice.exception.InvalidResponseFormatException;
@@ -11,10 +12,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ChatService {
@@ -22,7 +23,7 @@ public class ChatService {
     private static final Logger logger = LoggerFactory.getLogger(ChatService.class);
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
-    private final Map<String, List<Message>> memory = new ConcurrentHashMap<>();
+    private final Cache<String, List<Message>> memory;
     private static final int MEMORY_SIZE = 10;
 
     @Value("${openrouter.model}")
@@ -31,19 +32,26 @@ public class ChatService {
     @Value("${openrouter.api.url}")
     private String apiUrl;
 
-
-    public ChatService(RestClient restClient, ObjectMapper objectMapper) {
+    public ChatService(
+            RestClient restClient,
+            ObjectMapper objectMapper,
+            @Value("${chat.session.ttl-minutes:30}") long ttlMinutes,
+            @Value("${chat.session.max-size:1000}") long maxSize) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
+        this.memory = Caffeine.newBuilder()
+                .expireAfterAccess(Duration.ofMinutes(ttlMinutes))
+                .maximumSize(maxSize)
+                .build();
     }
 
     public record Message(String role, String content) {}
     public record OpenRouterRequest(String model, List<Message> messages) {}
     public record OpenRouterResponse(List<Choice> choices) {}
     public record Choice(Message message) {}
-    public record ApiChatRequest(String personality, String message, String sessionId){}
+    public record ApiChatRequest(String personality, String message, String sessionId) {}
 
-    public String getAiResponse(List<Message> history, String personality, int memorySize){
+    public String getAiResponse(List<Message> history, String personality, int memorySize) {
 
         List<Message> messages = getMessages(personality);
 
@@ -63,9 +71,7 @@ public class ChatService {
 
             logger.info("Raw OpenRouter response: {}", rawResponse);
 
-            OpenRouterResponse response;
-
-            response = getOpenRouterResponse(rawResponse);
+            OpenRouterResponse response = getOpenRouterResponse(rawResponse);
 
             if (response.choices() != null &&
                     !response.choices().isEmpty() &&
@@ -90,11 +96,11 @@ public class ChatService {
         List<Message> messages = new ArrayList<>();
 
         String systemContent = switch (personality) {
-            case "pirate" -> "You answer like a pirate. You only care about rum";
-            case "coder" -> "You are a senior developer. Explain clearly with Java examples.";
-            case "rapper" -> "You answer like a rapper. You make rhymes with everything in life";
+            case "pirate"   -> "You answer like a pirate. You only care about rum";
+            case "coder"    -> "You are a senior developer. Explain clearly with Java examples.";
+            case "rapper"   -> "You answer like a rapper. You make rhymes with everything in life";
             case "comedian" -> "You are a comedian. Make even the most serious topic a joke";
-            default -> "You are a helpful assistant.";
+            default         -> "You are a helpful assistant.";
         };
 
         messages.add(new Message("system", systemContent));
@@ -102,26 +108,28 @@ public class ChatService {
     }
 
     private OpenRouterResponse getOpenRouterResponse(String rawResponse) {
-        OpenRouterResponse response;
         try {
-            response = objectMapper.readValue(rawResponse, OpenRouterResponse.class);
+            OpenRouterResponse response = objectMapper.readValue(rawResponse, OpenRouterResponse.class);
             logger.info("Incoming ChatResponse: {}", response);
-
-        } catch (Exception e){
+            return response;
+        } catch (Exception e) {
             logger.error("Failed to deserialize OpenRouter response from JSON", e);
             throw new InvalidResponseFormatException("Invalid response format from OpenRouter.");
         }
-        return response;
     }
 
-    public String chat(ApiChatRequest request){
+    public String chat(ApiChatRequest request) {
 
         String sessionId = request.sessionId();
 
         if (sessionId == null || sessionId.isBlank())
             sessionId = "default-session";
 
-        List<Message> history = memory.getOrDefault(sessionId, new ArrayList<>());
+        List<Message> history = memory.getIfPresent(sessionId);
+        if (history == null) {
+            history = new ArrayList<>();
+        }
+
         history.add(new Message("user", request.message()));
 
         String aiAnswer = getAiResponse(history, request.personality(), MEMORY_SIZE);
@@ -133,8 +141,6 @@ public class ChatService {
     }
 
     public Map<String, List<Message>> getMemory() {
-        return memory;
+        return memory.asMap();
     }
-
-
 }
