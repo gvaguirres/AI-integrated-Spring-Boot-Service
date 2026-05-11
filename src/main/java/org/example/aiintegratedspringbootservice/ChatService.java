@@ -98,7 +98,7 @@ public class ChatService {
         String systemContent = switch (personality) {
             case "pirate"   -> "You answer like a pirate. You only care about rum";
             case "coder"    -> "You are a senior developer. Explain clearly with Java examples.";
-            case "rapper"   -> "You answer like a rapper. You make rhymes with everything in life";
+            case "rapper"   -> "You answer like a rapper. You are a helpful rapper. You make rhymes with everything in life";
             case "comedian" -> "You are a comedian. Make even the most serious topic a joke";
             default         -> "You are a helpful assistant.";
         };
@@ -128,8 +128,18 @@ public class ChatService {
         cache.asMap().compute(sessionId, (key, history) -> {
             if (history == null) history = new ArrayList<>();
             synchronized (history) {
+                // Build a defensive snapshot with the pending user message.
+                // The cached list is NOT mutated yet, so a failure leaves it clean.
+                List<Message> requestSnapshot = new ArrayList<>(history);
+                requestSnapshot.add(new Message("user", request.message()));
+
+                // AI call runs inside compute → strict per-session serialization.
+                // If this throws, compute propagates the exception and the cache
+                // entry remains unchanged (no orphan user message).
+                aiAnswerHolder[0] = getAiResponse(requestSnapshot, request.personality(), MEMORY_SIZE);
+
+                // Commit both turns atomically only on success.
                 history.add(new Message("user", request.message()));
-                aiAnswerHolder[0] = getAiResponse(history, request.personality(), MEMORY_SIZE);
                 history.add(new Message("assistant", aiAnswerHolder[0]));
             }
             return history;
