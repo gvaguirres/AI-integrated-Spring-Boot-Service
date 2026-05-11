@@ -141,6 +141,12 @@ public class ChatService {
                 // Commit both turns atomically only on success.
                 history.add(new Message("user", request.message()));
                 history.add(new Message("assistant", aiAnswerHolder[0]));
+
+                // Bound the per-session list so a single hot session can't OOM the JVM.
+                int maxHistory = MEMORY_SIZE * 2;
+                if (history.size() > maxHistory) {
+                    history.subList(0, history.size() - maxHistory).clear();
+                }
             }
             return history;
         });
