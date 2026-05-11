@@ -40,6 +40,7 @@ class AiIntegratedSpringBootServiceApplicationTests {
     @BeforeEach
     void resetWireMock() {
         wireMockServer.resetAll();
+        chatService.getMemory().clear();
     }
 
     @DynamicPropertySource
